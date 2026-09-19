@@ -1,0 +1,7 @@
+{
+  "name": "Генератор Анимированного Текста для Видео",
+  "description": "Одностраничное веб-приложение для создания коротких видеороликов с красивым анимированным текстом поверх фото и видео.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
