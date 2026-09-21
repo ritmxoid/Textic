@@ -168,9 +168,62 @@ class ParticleEngine {
     }
   }
 
+  dustParticles: Particle[] = [];
+
+  updateAndDrawDust(
+    ctx: CanvasRenderingContext2D,
+    bounds: { x: number; y: number; width: number; height: number },
+    color: string,
+    time: number
+  ) {
+    if (bounds.width <= 0) return;
+
+    if (this.dustParticles.length < 55) {
+      const margin = 45;
+      this.dustParticles.push({
+        x: bounds.x - margin + Math.random() * (bounds.width + margin * 2),
+        y: bounds.y - margin + Math.random() * (bounds.height + margin * 2),
+        vx: (Math.random() - 0.5) * 22,
+        vy: -14 - Math.random() * 26,
+        size: 2.5 + Math.random() * 4,
+        alpha: 0.2,
+        color: Math.random() > 0.4 ? color : '#38bdf8',
+        rotation: Math.random() * Math.PI,
+        life: 0,
+        maxLife: 1.8 + Math.random() * 2.2,
+      });
+    }
+
+    const dt = 0.03;
+    for (let i = this.dustParticles.length - 1; i >= 0; i--) {
+      const p = this.dustParticles[i];
+      p.life += dt;
+      if (p.life >= p.maxLife) {
+        this.dustParticles.splice(i, 1);
+        continue;
+      }
+
+      p.x += p.vx * dt + Math.sin(time * 3.5 + p.y * 0.04) * 0.9;
+      p.y += p.vy * dt;
+
+      const progress = p.life / p.maxLife;
+      p.alpha = Math.sin(progress * Math.PI) * 0.85;
+
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, Math.min(1, p.alpha));
+      ctx.fillStyle = p.color;
+      ctx.shadowColor = p.color;
+      ctx.shadowBlur = 8;
+      // Draw small square pixel dust speck
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+      ctx.restore();
+    }
+  }
+
   reset() {
     this.sparkles = [];
     this.fireParticles = [];
+    this.dustParticles = [];
   }
 }
 
@@ -182,12 +235,14 @@ export function renderCanvasFrame({
   currentTime,
   bgMediaElement,
   dimensions,
+  targetDuration,
 }: {
   ctx: CanvasRenderingContext2D;
   state: VideoProjectState;
   currentTime: number;
   bgMediaElement: HTMLImageElement | HTMLVideoElement | null;
   dimensions: CanvasDimensions;
+  targetDuration?: number;
 }) {
   const { width, height } = dimensions;
 
@@ -200,7 +255,9 @@ export function renderCanvasFrame({
     state.rawText,
     state.textMode,
     state.speedMultiplier,
-    state.pauseBetweenSeconds
+    state.pauseBetweenSeconds,
+    targetDuration,
+    state.animationStyle
   );
 
   // Find active segment for current time
@@ -645,8 +702,9 @@ function drawBackground(
     }
     ctx.restore();
   } else if (preset.id === 'clean-white') {
-    // Чисто белый лист с микро-текстурой бумаги
-    ctx.fillStyle = '#ffffff';
+    // Лист бумаги с возможностью выбора пользовательского цвета
+    const sheetColor = state.bgCustomColor || '#ffffff';
+    ctx.fillStyle = sheetColor;
     ctx.fillRect(0, 0, width, height);
 
     // Легкая виньетка по краям листа для объема
@@ -659,7 +717,7 @@ function drawBackground(
       Math.max(width, height) * 0.85
     );
     paperGrad.addColorStop(0, 'rgba(255, 255, 255, 0)');
-    paperGrad.addColorStop(1, 'rgba(226, 232, 240, 0.45)');
+    paperGrad.addColorStop(1, 'rgba(0, 0, 0, 0.08)');
     ctx.fillStyle = paperGrad;
     ctx.fillRect(0, 0, width, height);
   } else if (preset.id === 'old-parchment') {
@@ -702,12 +760,12 @@ function drawBackground(
     ctx.strokeRect(7, 7, width - 14, height - 14);
     ctx.restore();
   } else if (preset.id === 'notebook-grid') {
-    // 3. Тетрадный лист в клетку
-    ctx.fillStyle = '#ffffff';
+    // 3. Тетрадный лист в клетку (без красной полоски полей)
+    const sheetColor = state.bgCustomColor || '#ffffff';
+    ctx.fillStyle = sheetColor;
     ctx.fillRect(0, 0, width, height);
 
     const gridSize = 40; // Размер клетки
-    const marginX = Math.round(width * 0.14); // Красные поля тетради
 
     // Синяя сетка клеток
     ctx.save();
@@ -722,14 +780,6 @@ function drawBackground(
       ctx.moveTo(0, y);
       ctx.lineTo(width, y);
     }
-    ctx.stroke();
-
-    // Красная вертикальная черта полей
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = 'rgba(239, 68, 68, 0.7)';
-    ctx.beginPath();
-    ctx.moveTo(marginX, 0);
-    ctx.lineTo(marginX, height);
     ctx.stroke();
     ctx.restore();
   } else if (preset.id === 'flying-hearts') {
@@ -952,8 +1002,358 @@ function drawBackground(
       ctx.fill();
     }
     ctx.globalAlpha = 1;
+  } else if (preset.id === 'anecdote') {
+    // 8. Анекдот: Летающие смеющиеся и хохочущие смайлики (😂, 🤣, 😆, 😹, 😜)
+    const laughterBg = ctx.createLinearGradient(0, 0, 0, height);
+    laughterBg.addColorStop(0, '#1e0538');
+    laughterBg.addColorStop(0.5, '#3b0764');
+    laughterBg.addColorStop(1, '#110224');
+    ctx.fillStyle = laughterBg;
+    ctx.fillRect(0, 0, width, height);
+
+    const laughEmojis = ['😂', '🤣', '😆', '😹', '😜', '😂', '🤣'];
+    const count = 26;
+
+    ctx.save();
+    for (let i = 0; i < count; i++) {
+      const speed = 75 + (i % 6) * 22;
+      const size = 32 + (i % 5) * 14;
+      const xSway = Math.sin(time * 2.1 + i * 1.8) * 45;
+      const x = ((i * 145 + xSway) % (width + 80)) - 40;
+      const y = height - ((time * speed + i * 160) % (height + 220));
+      const emoji = laughEmojis[i % laughEmojis.length];
+      const rot = Math.sin(time * 3 + i * 1.5) * 0.35;
+      const bounce = 1 + Math.sin(time * 6 + i * 2) * 0.14;
+      const alpha = Math.min(1, Math.max(0.2, Math.sin((y / height) * Math.PI) * 0.95));
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rot);
+      ctx.scale(bounce, bounce);
+      ctx.globalAlpha = alpha;
+      ctx.font = `${size}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowColor = '#facc15';
+      ctx.shadowBlur = 18;
+      ctx.fillText(emoji, 0, 0);
+
+      // Брызги смеха / звездочки
+      if (i % 3 === 0) {
+        ctx.fillStyle = '#fde047';
+        ctx.font = `${Math.round(size * 0.45)}px sans-serif`;
+        ctx.fillText('✨', size * 0.6, -size * 0.5);
+      }
+      ctx.restore();
+    }
+    ctx.restore();
+  } else if (preset.id === 'autumn') {
+    // 9. Осень: Парящие золотые и багряные осенние листья
+    const autumnBg = ctx.createLinearGradient(0, 0, 0, height);
+    autumnBg.addColorStop(0, '#2a1104');
+    autumnBg.addColorStop(0.5, '#451a03');
+    autumnBg.addColorStop(1, '#180701');
+    ctx.fillStyle = autumnBg;
+    ctx.fillRect(0, 0, width, height);
+
+    const leafIcons = ['🍁', '🍂', '🍃'];
+    const count = 30;
+
+    ctx.save();
+    for (let i = 0; i < count; i++) {
+      const speed = 65 + (i % 7) * 24;
+      const size = 26 + (i % 5) * 12;
+      const xSway = Math.sin(time * 1.4 + i * 2.2) * 65 + Math.cos(time * 0.8 + i) * 30;
+      const x = ((i * 135 + xSway) % (width + 80)) - 40;
+      const y = ((time * speed + i * 150) % (height + 200)) - 50;
+      const icon = leafIcons[i % leafIcons.length];
+      const rot = Math.sin(time * 1.8 + i) * 0.6 + (time * 0.4);
+      const flipScale = Math.sin(time * 2.5 + i * 1.3);
+      const alpha = Math.min(1, Math.max(0.25, Math.sin((y / height) * Math.PI) * 0.95));
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rot);
+      ctx.scale(Math.abs(flipScale) * 0.6 + 0.4, 1);
+      ctx.globalAlpha = alpha;
+      ctx.font = `${size}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowColor = '#f59e0b';
+      ctx.shadowBlur = 15;
+      ctx.fillText(icon, 0, 0);
+      ctx.restore();
+    }
+    ctx.restore();
+  } else if (preset.id === 'winter') {
+    // 10. Зима: Парящие пушистые снежинки с морозным мерцанием
+    const winterBg = ctx.createLinearGradient(0, 0, 0, height);
+    winterBg.addColorStop(0, '#031926');
+    winterBg.addColorStop(0.5, '#0a2e46');
+    winterBg.addColorStop(1, '#020b12');
+    ctx.fillStyle = winterBg;
+    ctx.fillRect(0, 0, width, height);
+
+    const count = 48;
+    ctx.save();
+    for (let i = 0; i < count; i++) {
+      const speed = 45 + (i % 6) * 20;
+      const size = 10 + (i % 6) * 5;
+      const xSway = Math.sin(time * 1.2 + i * 1.7) * 35;
+      const x = ((i * 115 + xSway) % (width + 60)) - 30;
+      const y = ((time * speed + i * 120) % (height + 150)) - 30;
+      const alpha = Math.min(1, Math.max(0.2, Math.sin((y / height) * Math.PI) * 0.9));
+      const rot = time * 0.5 + i;
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rot);
+      ctx.globalAlpha = alpha;
+
+      if (i % 4 === 0) {
+        ctx.strokeStyle = '#ffffff';
+        ctx.shadowColor = '#93c5fd';
+        ctx.shadowBlur = 10;
+        ctx.lineWidth = 1.6;
+        for (let ray = 0; ray < 6; ray++) {
+          ctx.rotate(Math.PI / 3);
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.lineTo(0, size);
+          ctx.moveTo(0, size * 0.55);
+          ctx.lineTo(size * 0.28, size * 0.8);
+          ctx.moveTo(0, size * 0.55);
+          ctx.lineTo(-size * 0.28, size * 0.8);
+          ctx.stroke();
+        }
+      } else {
+        const rad = ctx.createRadialGradient(0, 0, 1, 0, 0, size * 0.5);
+        rad.addColorStop(0, '#ffffff');
+        rad.addColorStop(0.5, 'rgba(224, 242, 254, 0.8)');
+        rad.addColorStop(1, 'rgba(186, 230, 253, 0)');
+        ctx.fillStyle = rad;
+        ctx.beginPath();
+        ctx.arc(0, 0, size * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+    ctx.restore();
+  } else if (preset.id === 'music') {
+    // 11. Музыка: Летающие светящиеся музыкальные ноты (🎵, 🎶, 🎼, ♪, ♫)
+    const musicBg = ctx.createLinearGradient(0, 0, 0, height);
+    musicBg.addColorStop(0, '#0a061c');
+    musicBg.addColorStop(0.5, '#1e1445');
+    musicBg.addColorStop(1, '#05030e');
+    ctx.fillStyle = musicBg;
+    ctx.fillRect(0, 0, width, height);
+
+    // Волновые звуковые линии
+    ctx.save();
+    ctx.lineWidth = 2;
+    for (let wave = 0; wave < 3; wave++) {
+      ctx.beginPath();
+      ctx.strokeStyle =
+        wave === 0
+          ? 'rgba(168, 85, 247, 0.22)'
+          : wave === 1
+          ? 'rgba(56, 189, 248, 0.18)'
+          : 'rgba(236, 72, 153, 0.15)';
+      for (let x = 0; x <= width; x += 20) {
+        const y = height * (0.35 + wave * 0.18) + Math.sin(x * 0.008 + time * 2.5 + wave * 2) * 45;
+        if (x === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    const noteIcons = ['🎵', '🎶', '🎼', '♪', '♫'];
+    const colors = ['#c084fc', '#38bdf8', '#f472b6', '#a78bfa', '#facc15'];
+    const count = 26;
+
+    ctx.save();
+    for (let i = 0; i < count; i++) {
+      const speed = 75 + (i % 6) * 22;
+      const size = 30 + (i % 5) * 12;
+      const xSway = Math.sin(time * 1.8 + i * 1.5) * 40;
+      const x = ((i * 135 + xSway) % (width + 80)) - 40;
+      const y = height - ((time * speed + i * 160) % (height + 200));
+      const icon = noteIcons[i % noteIcons.length];
+      const col = colors[i % colors.length];
+      const rot = Math.sin(time * 2 + i) * 0.25;
+      const pulse = 1 + Math.sin(time * 4 + i) * 0.12;
+      const alpha = Math.min(1, Math.max(0.2, Math.sin((y / height) * Math.PI) * 0.95));
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rot);
+      ctx.scale(pulse, pulse);
+      ctx.globalAlpha = alpha;
+      ctx.font = `${size}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowColor = col;
+      ctx.shadowBlur = 22;
+      ctx.fillText(icon, 0, 0);
+      ctx.restore();
+    }
+    ctx.restore();
+  } else if (preset.id === 'disco') {
+    // 12. Диско: Неоновый эквалайзер с танцующими полосами
+    const discoBg = ctx.createLinearGradient(0, 0, 0, height);
+    discoBg.addColorStop(0, '#09090f');
+    discoBg.addColorStop(0.5, '#190a2a');
+    discoBg.addColorStop(1, '#05020a');
+    ctx.fillStyle = discoBg;
+    ctx.fillRect(0, 0, width, height);
+
+    // Верхние диско-лучи
+    ctx.save();
+    for (let b = 0; b < 4; b++) {
+      const beamX = width * (0.2 + b * 0.2) + Math.sin(time * 1.8 + b) * (width * 0.1);
+      const beamGrad = ctx.createRadialGradient(beamX, 0, 10, beamX, height * 0.5, width * 0.35);
+      const beamColor = b % 2 === 0 ? 'rgba(236, 72, 153, 0.16)' : 'rgba(6, 182, 212, 0.16)';
+      beamGrad.addColorStop(0, beamColor);
+      beamGrad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = beamGrad;
+      ctx.fillRect(0, 0, width, height);
+    }
+    ctx.restore();
+
+    // Музыкальный эквалайзер
+    const barCount = 28;
+    const barWidth = Math.max(6, Math.floor(width / (barCount * 1.4)));
+    const gap = Math.max(4, Math.floor(barWidth * 0.35));
+    const totalEqWidth = barCount * (barWidth + gap);
+    const startX = (width - totalEqWidth) / 2;
+    const baseY = height * 0.88;
+    const maxBarHeight = height * 0.45;
+
+    ctx.save();
+    for (let i = 0; i < barCount; i++) {
+      const freq1 = Math.sin(time * 8 + i * 0.7);
+      const freq2 = Math.cos(time * 13 + i * 1.2);
+      const freq3 = Math.sin(time * 4 + i * 0.3);
+      const normHeight = Math.max(0.08, Math.min(1, freq1 * 0.4 + freq2 * 0.35 + freq3 * 0.25 + 0.55));
+      const barH = normHeight * maxBarHeight;
+      const bx = startX + i * (barWidth + gap);
+      const by = baseY - barH;
+
+      const barGrad = ctx.createLinearGradient(0, baseY, 0, baseY - maxBarHeight);
+      barGrad.addColorStop(0, '#06b6d4');
+      barGrad.addColorStop(0.4, '#10b981');
+      barGrad.addColorStop(0.7, '#facc15');
+      barGrad.addColorStop(0.9, '#f43f5e');
+      barGrad.addColorStop(1, '#ec4899');
+
+      ctx.fillStyle = barGrad;
+      ctx.shadowColor = '#06b6d4';
+      ctx.shadowBlur = 10;
+      ctx.fillRect(bx, by, barWidth, barH);
+
+      // Пиковый маркер над каждым столбцом
+      const peakH = 4;
+      const peakOffset = Math.sin(time * 5 + i * 0.5) * 6;
+      const peakY = Math.max(baseY - maxBarHeight, by - 8 - Math.max(0, peakOffset));
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = '#ffffff';
+      ctx.shadowBlur = 8;
+      ctx.fillRect(bx, peakY, barWidth, peakH);
+
+      // Отражение на глянцевом полу
+      ctx.globalAlpha = 0.22;
+      ctx.fillRect(bx, baseY + 6, barWidth, barH * 0.35);
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+  } else if (preset.id === 'lasers') {
+    // 13. Лучи: Разноцветные лазерные лучи в клубящемся дыму
+    ctx.fillStyle = '#03050a';
+    ctx.fillRect(0, 0, width, height);
+
+    // Клубящийся дым
+    ctx.save();
+    const smokeSpots = [
+      { x: width * 0.3, y: height * 0.4, r: width * 0.55, c: 'rgba(56, 189, 248, 0.12)' },
+      { x: width * 0.7, y: height * 0.5, r: width * 0.6, c: 'rgba(236, 72, 153, 0.12)' },
+      { x: width * 0.5, y: height * 0.7, r: width * 0.5, c: 'rgba(168, 85, 247, 0.14)' },
+    ];
+    smokeSpots.forEach((s, idx) => {
+      const sx = s.x + Math.sin(time * 0.8 + idx) * 40;
+      const sy = s.y + Math.cos(time * 0.6 + idx) * 35;
+      const g = ctx.createRadialGradient(sx, sy, 20, sx, sy, s.r);
+      g.addColorStop(0, s.c);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(sx, sy, s.r, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.restore();
+
+    // Неоновые лазерные лучи
+    const laserColors = [
+      { glow: '#22c55e', originX: 0, originY: 0 },
+      { glow: '#06b6d4', originX: width, originY: 0 },
+      { glow: '#ec4899', originX: width * 0.5, originY: 0 },
+      { glow: '#a855f7', originX: 0, originY: height * 0.2 },
+      { glow: '#eab308', originX: width, originY: height * 0.2 },
+      { glow: '#ef4444', originX: width * 0.5, originY: 0 },
+    ];
+
+    ctx.save();
+    laserColors.forEach((laser, idx) => {
+      const sweep = Math.sin(time * 1.5 + idx * 1.2);
+      const targetX = width * (0.15 + (idx % 4) * 0.25) + sweep * (width * 0.35);
+      const targetY = height + 50;
+
+      // Широкий светящийся конус
+      ctx.save();
+      ctx.lineWidth = 14;
+      ctx.strokeStyle = laser.glow;
+      ctx.globalAlpha = 0.18;
+      ctx.beginPath();
+      ctx.moveTo(laser.originX, laser.originY);
+      ctx.lineTo(targetX, targetY);
+      ctx.stroke();
+
+      // Средний ореол
+      ctx.globalAlpha = 0.85;
+      ctx.lineWidth = 4.5;
+      ctx.strokeStyle = laser.glow;
+      ctx.shadowColor = laser.glow;
+      ctx.shadowBlur = 24;
+      ctx.beginPath();
+      ctx.moveTo(laser.originX, laser.originY);
+      ctx.lineTo(targetX, targetY);
+      ctx.stroke();
+
+      // Яркий белый сердечник луча
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = 1.8;
+      ctx.strokeStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.moveTo(laser.originX, laser.originY);
+      ctx.lineTo(targetX, targetY);
+      ctx.stroke();
+      ctx.restore();
+    });
+
+    // Искры и мерцающая пыль в лучах
+    for (let i = 0; i < 35; i++) {
+      const px = (i * 179.3 + time * 15) % width;
+      const py = (i * 241.7 + time * 25) % height;
+      const twinkle = Math.sin(time * 5 + i) * 0.5 + 0.5;
+      ctx.fillStyle = '#ffffff';
+      ctx.globalAlpha = twinkle * 0.7;
+      ctx.beginPath();
+      ctx.arc(px, py, 1.2 + (i % 2), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   } else {
-    // Linear dynamic gradient
+    // Linear dynamic gradient (with custom color support)
     const angle = time * 0.1;
     const x1 = width / 2 + Math.cos(angle) * (width / 2);
     const y1 = height / 2 + Math.sin(angle) * (height / 2);
@@ -961,7 +1361,10 @@ function drawBackground(
     const y2 = height / 2 - Math.sin(angle) * (height / 2);
 
     const grad = ctx.createLinearGradient(x1, y1, x2, y2);
-    const colors = preset.colors;
+    let colors = preset.colors;
+    if (state.bgCustomColor && preset.type === 'gradient') {
+      colors = [state.bgCustomColor, ...preset.colors.slice(1)];
+    }
     colors.forEach((col, idx) => {
       grad.addColorStop(idx / (colors.length - 1), col);
     });
@@ -1089,23 +1492,20 @@ function drawTextSegment({
   );
 
   const elapsed = Math.max(0, currentTime - segment.startTime);
-  
-  // Animation duration depends directly on speedMultiplier and animation style
+  const effectiveSpeed = Math.max(0.1, Math.min(3.0, state.speedMultiplier));
+
+  // Natural pacing calculations:
+  // Text animation unfolds smoothly across ~82% of the segment duration,
+  // leaving ~18% for comfortable reading pause and viewing the author.
   let animDuration: number;
   if (state.animationStyle === 'typewriter') {
-    // Typewriter: letters reveal throughout ~75% of the phrase duration
-    animDuration = Math.max(0.3, segment.duration * 0.75);
+    animDuration = Math.max(0.3, segment.duration * 0.82);
   } else if (state.animationStyle === 'words') {
-    // Word-by-word: reveals throughout ~70% of the phrase duration
-    animDuration = Math.max(0.3, segment.duration * 0.70);
+    animDuration = Math.max(0.3, segment.duration * 0.82);
   } else if (state.animationStyle === 'glitch') {
-    // Glitch entrance: energetic electric arrival with jitter
-    const entrance = 0.65 / Math.max(0.3, state.speedMultiplier);
-    animDuration = Math.min(segment.duration * 0.85, Math.max(0.2, entrance));
+    animDuration = Math.min(1.2, Math.max(0.25, 0.65 / effectiveSpeed));
   } else {
-    // Fade / Slide / Zoom: entrance duration is inversely proportional to speedMultiplier
-    const entrance = 0.65 / Math.max(0.3, state.speedMultiplier);
-    animDuration = Math.min(segment.duration * 0.85, Math.max(0.15, entrance));
+    animDuration = Math.min(1.2, Math.max(0.2, 0.65 / effectiveSpeed));
   }
 
   const progress = Math.min(1, elapsed / animDuration);
@@ -1115,7 +1515,8 @@ function drawTextSegment({
   const hasAuthor = isLastSegment && rawAuthor.length > 0;
   // Author size is ~82% of main quote font size (twice as large as original 40%), clearly visible while smaller than main text
   const authorFontSize = Math.max(32, Math.min(96, Math.round(layout.fontSize * 0.82)));
-  const authorGap = Math.max(22, Math.round(layout.fontSize * 0.42));
+  // Расстояние до имени автора: базовый отступ + дополнительные полстроки (layout.lineHeight * 0.5), чтобы не приклеивалось к тексту
+  const authorGap = Math.max(36, Math.round(layout.fontSize * 0.42 + layout.lineHeight * 0.5));
   const authorHeight = hasAuthor ? authorGap + authorFontSize * 1.3 : 0;
   const totalCombinedHeight = layout.totalHeight + authorHeight;
 
@@ -1420,6 +1821,71 @@ function drawTextSegment({
       }
       ctx.restore();
     }
+
+    // Particles assembling letters/words from flying pixels
+    if (state.effects.particles && line.length > 0) {
+      ctx.save();
+      const lineLen = line.length;
+      const fullTextLen = Math.max(1, layout.lines.join('').length);
+      let charOffset = 0;
+      for (let prevIdx = 0; prevIdx < index; prevIdx++) {
+        charOffset += layout.lines[prevIdx].length;
+      }
+
+      const totalLineWidth = ctx.measureText(line).width;
+      let startCharX = drawLineX;
+      if (state.textAlign === 'center') startCharX = drawLineX - totalLineWidth / 2;
+      else if (state.textAlign === 'right') startCharX = drawLineX - totalLineWidth;
+
+      let runningWidth = 0;
+      for (let c = 0; c < lineLen; c++) {
+        const char = line[c];
+        const charWidth = ctx.measureText(char).width;
+        if (char !== ' ') {
+          const charCenterX = startCharX + runningWidth + charWidth / 2;
+          const charCenterY = drawLineY - layout.fontSize * 0.35;
+          const globalCharIdx = charOffset + c;
+
+          const charAppearRatio = globalCharIdx / fullTextLen;
+          const assembleProg = Math.max(0, Math.min(1, (progress - charAppearRatio * 0.75) / 0.25));
+
+          if (assembleProg < 1) {
+            const scatterDist = (1 - easeOutCubic(assembleProg)) * (layout.fontSize * 1.3);
+            const numSparks = 6;
+            for (let s = 0; s < numSparks; s++) {
+              const sparkSeed = (globalCharIdx * 23 + s * 41);
+              const angle = (s * Math.PI * 2 / numSparks) + (1 - assembleProg) * 4.5 + Math.sin(currentTime * 8 + sparkSeed);
+              const px = charCenterX + Math.cos(angle) * scatterDist * (0.6 + (s % 3) * 0.3);
+              const py = charCenterY + Math.sin(angle) * scatterDist * (0.6 + ((s + 1) % 3) * 0.3);
+              const pAlpha = (1 - assembleProg) * (0.45 + Math.sin(currentTime * 12 + s) * 0.35);
+              const pSize = Math.max(2.5, layout.fontSize * 0.052);
+
+              ctx.globalAlpha = Math.max(0, Math.min(1, alpha * pAlpha));
+              ctx.fillStyle = s % 2 === 0 ? state.textColor : '#38bdf8';
+              ctx.shadowColor = s % 2 === 0 ? state.textColor : '#38bdf8';
+              ctx.shadowBlur = 6;
+              ctx.fillRect(px - pSize / 2, py - pSize / 2, pSize, pSize);
+            }
+          } else {
+            if (globalCharIdx % 3 === 0) {
+              const moteTime = currentTime * 2.2 + globalCharIdx * 0.8;
+              const mx = charCenterX + Math.sin(moteTime) * (layout.fontSize * 0.22);
+              const my = charCenterY + Math.cos(moteTime * 0.7) * (layout.fontSize * 0.25) - 4;
+              const mAlpha = 0.25 + 0.35 * Math.sin(moteTime * 1.6);
+              const mSize = Math.max(2, layout.fontSize * 0.038);
+
+              ctx.globalAlpha = Math.max(0, Math.min(1, alpha * mAlpha));
+              ctx.fillStyle = globalCharIdx % 2 === 0 ? state.textColor : '#38bdf8';
+              ctx.shadowColor = ctx.fillStyle;
+              ctx.shadowBlur = 5;
+              ctx.fillRect(mx - mSize / 2, my - mSize / 2, mSize, mSize);
+            }
+          }
+        }
+        runningWidth += charWidth;
+      }
+      ctx.restore();
+    }
   });
 
   // Render Author under the main quote if present
@@ -1474,11 +1940,14 @@ function drawTextSegment({
 
   ctx.restore();
 
-  // Draw Particles (Sparkles / Fire) over text
+  // Draw Particles (Sparkles / Fire / Particles Dust) over text
   if (state.effects.sparkle) {
     particleEngine.updateAndDrawSparkles(ctx, bounds, currentTime);
   }
   if (state.effects.fire) {
     particleEngine.updateAndDrawFire(ctx, bounds, currentTime);
+  }
+  if (state.effects.particles) {
+    particleEngine.updateAndDrawDust(ctx, bounds, state.textColor, currentTime);
   }
 }

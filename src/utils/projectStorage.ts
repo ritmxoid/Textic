@@ -60,10 +60,15 @@ function openDB(): Promise<IDBDatabase | null> {
  * Save project text, typography, and settings to localStorage.
  * Transient blob: URLs are omitted because they expire on tab reload.
  */
-export function saveProjectState(state: VideoProjectState): void {
+export function saveProjectState(state: VideoProjectState, extra?: { fileName?: string | null }): void {
   try {
     const serializable = {
       ...state,
+      // Only persist filename if bgType is custom image or video
+      savedBgFileName:
+        state.bgType === 'video' || state.bgType === 'image'
+          ? extra?.fileName || (state as any).savedBgFileName || null
+          : null,
       // Clear transient blob URLs so we don't save broken URLs
       bgMediaUrl: state.bgMediaUrl?.startsWith('blob:') ? null : state.bgMediaUrl,
       audio: {
@@ -80,13 +85,13 @@ export function saveProjectState(state: VideoProjectState): void {
 /**
  * Load project state from localStorage
  */
-export function loadProjectState(): Partial<VideoProjectState> | null {
+export function loadProjectState(): (Partial<VideoProjectState> & { savedBgFileName?: string | null }) | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object') {
-      return parsed as Partial<VideoProjectState>;
+      return parsed;
     }
   } catch (err) {
     console.warn('Error loading state from localStorage:', err);
@@ -107,15 +112,24 @@ export async function saveMediaFile(
   const db = await openDB();
   if (!db) return;
 
+  // Make an independent standalone Blob to decouple from expiring mobile Android ContentProvider handles
+  const effectiveMime = mimeType || file.type || (id === 'background' ? 'video/mp4' : 'audio/mpeg');
+  let standaloneBlob: Blob;
+  try {
+    standaloneBlob = file.slice(0, file.size, effectiveMime);
+  } catch {
+    standaloneBlob = file;
+  }
+
   return new Promise((resolve) => {
     try {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
       const record: StoredMediaRecord = {
         id,
-        blob: file,
-        fileName,
-        mimeType: mimeType || file.type,
+        blob: standaloneBlob,
+        fileName: fileName || (id === 'background' ? 'custom-background' : 'custom-audio'),
+        mimeType: effectiveMime,
         duration,
         timestamp: Date.now(),
       };

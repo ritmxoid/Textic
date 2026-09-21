@@ -9,6 +9,7 @@ class AudioMixer {
   private recordDestination: MediaStreamAudioDestinationNode | null = null;
   private cachedBuffer: AudioBuffer | null = null;
   private cachedPresetId: string | null = null;
+  private cachedSeed: number | undefined = undefined;
   private cachedAudioUrl: string | null = null;
   private isPlaying = false;
   private startTime = 0;
@@ -61,7 +62,11 @@ class AudioMixer {
   /**
    * Pre-load or generate AudioBuffer for state
    */
-  public async prepareAudioBuffer(audioState: AudioState, totalDuration: number): Promise<AudioBuffer | null> {
+  public async prepareAudioBuffer(
+    audioState: AudioState,
+    totalDuration: number,
+    bgVideoUrl?: string
+  ): Promise<AudioBuffer | null> {
     if (!audioState.enabled || audioState.sourceType === 'none') {
       this.cachedBuffer = null;
       return null;
@@ -99,15 +104,40 @@ class AudioMixer {
       return this.inFlightAudioPromise;
     }
 
+    // If video sound source, decode audio from video background URL
+    if (audioState.sourceType === 'video') {
+      const targetUrl = audioState.audioUrl || bgVideoUrl;
+      if (targetUrl) {
+        const decoded = await this.prepareBackgroundVideoAudioBuffer(targetUrl);
+        if (decoded) {
+          this.cachedBuffer = decoded;
+          this.cachedAudioUrl = targetUrl;
+          return decoded;
+        }
+      }
+      this.cachedBuffer = null;
+      return null;
+    }
+
     // If procedural generator preset
     if (audioState.sourceType === 'generator') {
-      if (this.cachedBuffer && this.cachedPresetId === audioState.presetId) {
+      const currentSeed = audioState.seed ?? 1337;
+      if (
+        this.cachedBuffer &&
+        this.cachedPresetId === audioState.presetId &&
+        this.cachedSeed === currentSeed
+      ) {
         return this.cachedBuffer;
       }
       try {
-        const buffer = await generateProceduralTrack(audioState.presetId, Math.max(10, totalDuration + 2));
+        const buffer = await generateProceduralTrack(
+          audioState.presetId,
+          Math.max(10, totalDuration + 2),
+          currentSeed
+        );
         this.cachedBuffer = buffer;
         this.cachedPresetId = audioState.presetId;
+        this.cachedSeed = currentSeed;
         return buffer;
       } catch (err) {
         console.error('Error generating procedural track:', err);
@@ -121,14 +151,27 @@ class AudioMixer {
   /**
    * Start or resume playback in sync with video preview
    */
-  public async play(audioState: AudioState, totalDuration: number, offsetSeconds = 0) {
-    if (!audioState.enabled || audioState.sourceType === 'none' || audioState.volume <= 0) {
+  public async play(
+    audioState: AudioState,
+    totalDuration: number,
+    offsetSeconds = 0,
+    bgVideoUrl?: string
+  ) {
+    if (
+      !audioState.enabled ||
+      audioState.sourceType === 'none' ||
+      audioState.volume <= 0 ||
+      (audioState.sourceType === 'file' && !audioState.audioUrl)
+    ) {
       this.stop();
       return;
     }
 
-    const buffer = await this.prepareAudioBuffer(audioState, totalDuration);
-    if (!buffer) return;
+    const buffer = await this.prepareAudioBuffer(audioState, totalDuration, bgVideoUrl);
+    if (!buffer) {
+      this.stop();
+      return;
+    }
 
     this.stop();
 
@@ -241,11 +284,11 @@ export async function mixAudioBuffers(
   const validVol2 = Math.max(0, Math.min(1, Number.isFinite(vol2) ? vol2 : 1));
 
   if (buffer1 && !buffer2) {
-    if (validVol1 >= 0.98) return buffer1;
+    if (validVol1 <= 0.001) return null;
     return renderBufferWithGain(buffer1, validVol1, durationSeconds);
   }
   if (!buffer1 && buffer2) {
-    if (validVol2 >= 0.98) return buffer2;
+    if (validVol2 <= 0.001) return null;
     return renderBufferWithGain(buffer2, validVol2, durationSeconds);
   }
 
@@ -305,7 +348,60 @@ async function renderBufferWithGain(
   src.connect(gain);
   gain.connect(offlineCtx.destination);
   src.start(0);
-
   return await offlineCtx.startRendering();
+}
+
+/**
+ * Prepares a mixed AudioBuffer combining background video audio (if present and enabled)
+ * and background music (if present and enabled) for synchronous capture or export.
+ */
+export async function prepareDualAudioTrack(
+  audioState: AudioState,
+  bgMediaUrl: string | null | undefined,
+  isBgVideo: boolean,
+  durationSeconds: number
+): Promise<AudioBuffer | null> {
+  const isVideoAudioActive =
+    isBgVideo &&
+    !!bgMediaUrl &&
+    audioState.videoAudioEnabled !== false &&
+    (audioState.videoVolume ?? 0.8) > 0;
+
+  const isMusicActive =
+    audioState.enabled &&
+    (audioState.sourceType === 'generator' || audioState.sourceType === 'file') &&
+    (audioState.volume ?? 0.7) > 0 &&
+    (audioState.sourceType !== 'file' || !!audioState.audioUrl);
+
+  let videoBuffer: AudioBuffer | null = null;
+  if (isVideoAudioActive && bgMediaUrl) {
+    try {
+      videoBuffer = await audioMixer.prepareBackgroundVideoAudioBuffer(bgMediaUrl);
+    } catch (err) {
+      console.warn('Could not extract video audio:', err);
+    }
+  }
+
+  let musicBuffer: AudioBuffer | null = null;
+  if (isMusicActive) {
+    try {
+      musicBuffer = await audioMixer.prepareAudioBuffer(audioState, durationSeconds, bgMediaUrl || undefined);
+    } catch (err) {
+      console.warn('Could not prepare music buffer:', err);
+    }
+  }
+
+  const vidVol = audioState.videoVolume ?? 0.8;
+  const musVol = audioState.volume ?? 0.7;
+
+  if (videoBuffer && musicBuffer) {
+    return await mixAudioBuffers(videoBuffer, vidVol, musicBuffer, musVol, durationSeconds);
+  } else if (videoBuffer) {
+    return await mixAudioBuffers(videoBuffer, vidVol, null, 0, durationSeconds);
+  } else if (musicBuffer) {
+    return await mixAudioBuffers(null, 0, musicBuffer, musVol, durationSeconds);
+  }
+
+  return null;
 }
 
