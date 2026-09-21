@@ -66,7 +66,7 @@ export const AnimationStyleSection: React.FC<AnimationStyleSectionProps> = ({
         </h2>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 max-h-[128px] sm:max-h-[132px] overflow-y-auto pr-1.5 scrollbar-thin scrollbar-thumb-white/20 scrollbar-track-transparent rounded-xl">
         {STYLES.map((style) => {
           const isSelected = state.animationStyle === style.id;
           return (

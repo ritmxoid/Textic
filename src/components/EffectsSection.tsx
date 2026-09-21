@@ -1,6 +1,7 @@
-import React from 'react';
-import { Flame, Sparkles, SunMedium, Zap, BoxSelect } from 'lucide-react';
+import React, { useState } from 'react';
+import { Flame, Sparkles, SunMedium, Zap, BoxSelect, Orbit } from 'lucide-react';
 import { ExtraEffects, VideoProjectState } from '../types';
+import { ColorPickerModal } from './ColorPickerModal';
 
 interface EffectsSectionProps {
   state: VideoProjectState;
@@ -14,6 +15,13 @@ const EFFECTS_CONFIG: {
   icon: React.ReactNode;
   activeColor: string;
 }[] = [
+  {
+    key: 'particles',
+    title: 'Частицы (Particles)',
+    desc: 'Буквы и слова собираются из пикселей и летающих пылинок',
+    icon: <Orbit className="w-4 h-4 text-cyan-300" />,
+    activeColor: 'border-cyan-500/50 bg-cyan-500/10 text-cyan-200',
+  },
   {
     key: 'glow',
     title: 'Мерцание (Glow)',
@@ -55,6 +63,7 @@ export const EffectsSection: React.FC<EffectsSectionProps> = ({
   state,
   onChange,
 }) => {
+  const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
   const toggleEffect = (key: keyof ExtraEffects) => {
     onChange({
       effects: {
@@ -76,7 +85,7 @@ export const EffectsSection: React.FC<EffectsSectionProps> = ({
         <span className="text-xs text-zinc-400">Можно выбрать несколько</span>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[138px] sm:max-h-[142px] overflow-y-auto pr-1.5 scrollbar-thin scrollbar-thumb-white/20 scrollbar-track-transparent rounded-xl">
         {EFFECTS_CONFIG.map((eff) => {
           const isChecked = state.effects[eff.key];
           return (
@@ -118,18 +127,31 @@ export const EffectsSection: React.FC<EffectsSectionProps> = ({
             <Zap className="w-3.5 h-3.5" /> Цвет неонового свечения:
           </span>
           <div className="flex items-center gap-2">
-            <input
-              type="color"
-              value={state.neonColor}
-              onChange={(e) => onChange({ neonColor: e.target.value })}
-              className="w-6 h-6 rounded border border-zinc-700 bg-transparent cursor-pointer"
-            />
-            <span className="text-xs font-mono text-zinc-300 uppercase">
-              {state.neonColor}
-            </span>
+            <button
+              type="button"
+              onClick={() => setIsColorPickerOpen(true)}
+              className="flex items-center gap-1.5 px-2 py-1 rounded-lg border border-white/20 bg-zinc-800/80 hover:bg-zinc-700 transition-all cursor-pointer shadow-sm active:scale-95"
+              title="Выбрать цвет неонового свечения"
+            >
+              <span
+                className="w-3.5 h-3.5 rounded-full border border-white/40 shadow-inner shrink-0"
+                style={{ backgroundColor: state.neonColor }}
+              />
+              <span className="text-xs font-mono text-zinc-300 uppercase font-semibold">
+                {state.neonColor}
+              </span>
+            </button>
           </div>
         </div>
       )}
+
+      <ColorPickerModal
+        isOpen={isColorPickerOpen}
+        onClose={() => setIsColorPickerOpen(false)}
+        color={state.neonColor}
+        onChange={(newColor) => onChange({ neonColor: newColor })}
+        title="Микшер цвета неона"
+      />
     </div>
   );
 };

@@ -45,9 +45,9 @@ export const SpeedSection: React.FC<SpeedSectionProps> = ({
             className="w-full accent-purple-500 bg-zinc-800 h-2 rounded-lg cursor-pointer"
           />
           <div className="flex justify-between text-[10px] text-zinc-500">
-            <span>Очень медленно (0.1x)</span>
+            <span>0.1x (0.5 сек)</span>
             <span>Стандарт (1.0x)</span>
-            <span>Быстро (3.0x)</span>
+            <span>3.0x (2x быстрее)</span>
           </div>
         </div>
 

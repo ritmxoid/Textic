@@ -3,6 +3,8 @@ import {
   Play,
   Pause,
   RotateCcw,
+  Volume2,
+  VolumeX,
   Smartphone,
   Monitor,
   Square,
@@ -27,6 +29,8 @@ import { splitTextIntoSegments } from '../utils/textSplitter';
 import { audioMixer } from '../utils/audioMixer';
 import { FullscreenPlayer } from './FullscreenPlayer';
 
+import { EditingFocusInfo } from './TextInputSection';
+
 interface VideoPreviewProps {
   state: VideoProjectState;
   onChange: (patch: Partial<VideoProjectState>) => void;
@@ -42,6 +46,7 @@ interface VideoPreviewProps {
   isFullscreenOpen?: boolean;
   onOpenFullscreen?: () => void;
   onCloseFullscreen?: () => void;
+  editingInfo?: EditingFocusInfo | null;
 }
 
 export const VideoPreview: React.FC<VideoPreviewProps> = ({
@@ -59,6 +64,7 @@ export const VideoPreview: React.FC<VideoPreviewProps> = ({
   isFullscreenOpen,
   onOpenFullscreen,
   onCloseFullscreen,
+  editingInfo,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -154,26 +160,51 @@ export const VideoPreview: React.FC<VideoPreviewProps> = ({
     state.rawText,
     state.textMode,
     state.speedMultiplier,
-    state.pauseBetweenSeconds
+    state.pauseBetweenSeconds,
+    undefined,
+    state.animationStyle
   );
 
   // Sync background video element state & playback (only when fullscreen is NOT active)
   useEffect(() => {
     if (isFullscreenActive) return;
     if (bgMediaElement instanceof HTMLVideoElement) {
-      bgMediaElement.muted = isMuted;
+      const isVideoAudioActive =
+        !isMuted &&
+        state.audio.videoAudioEnabled !== false &&
+        (state.audio.videoVolume ?? 0.8) > 0;
+
+      bgMediaElement.muted = !isVideoAudioActive;
+      bgMediaElement.volume = Number.isFinite(state.audio.videoVolume)
+        ? Math.max(0, Math.min(1, state.audio.videoVolume ?? 0.8))
+        : 0.8;
+
       if (isPlaying) {
         bgMediaElement.play().catch(() => {});
       } else {
         bgMediaElement.pause();
       }
     }
-  }, [isPlaying, isMuted, bgMediaElement, isFullscreenActive]);
+  }, [
+    isPlaying,
+    isMuted,
+    bgMediaElement,
+    isFullscreenActive,
+    state.audio.videoAudioEnabled,
+    state.audio.videoVolume,
+  ]);
 
-  // Sync audio mixer playback (only when fullscreen is NOT active)
+  // Sync audio mixer playback (music track / uploaded MP3 / generator)
   useEffect(() => {
     if (isFullscreenActive) return;
-    if (isPlaying && !isMuted && state.audio.enabled && state.audio.sourceType !== 'none') {
+    if (
+      isPlaying &&
+      !isMuted &&
+      state.audio.enabled &&
+      state.audio.sourceType === 'file' &&
+      Boolean(state.audio.audioUrl) &&
+      (state.audio.volume ?? 0.7) > 0
+    ) {
       audioMixer.play(state.audio, totalDuration, currentTimeRef.current);
     } else {
       audioMixer.stop();
@@ -191,9 +222,50 @@ export const VideoPreview: React.FC<VideoPreviewProps> = ({
     state.audio.enabled,
     state.audio.sourceType,
     state.audio.presetId,
+    state.audio.seed,
     state.audio.audioUrl,
     state.audio.volume,
     totalDuration,
+  ]);
+
+  const getEditingDisplayTime = useCallback(() => {
+    if (!editingInfo || !editingInfo.isEditing) return null;
+    const { segments: allSegments } = splitTextIntoSegments(
+      state.rawText,
+      state.textMode,
+      state.speedMultiplier,
+      state.pauseBetweenSeconds,
+      undefined,
+      state.animationStyle
+    );
+    if (!allSegments || allSegments.length === 0) return 0;
+    if (editingInfo.isAuthor) {
+      const last = allSegments[allSegments.length - 1];
+      return last.startTime + last.duration * 0.95;
+    }
+    const cursor = editingInfo.cursorIndex || 0;
+    if (state.textMode === 'full' || allSegments.length === 1) {
+      const seg = allSegments[0];
+      return seg.startTime + seg.duration * 0.95;
+    }
+    let charAcc = 0;
+    let targetSeg = allSegments[0];
+    for (const seg of allSegments) {
+      const segLen = seg.text.length;
+      if (cursor <= charAcc + segLen) {
+        targetSeg = seg;
+        break;
+      }
+      charAcc += segLen + 1;
+    }
+    return targetSeg ? targetSeg.startTime + targetSeg.duration * 0.95 : 0;
+  }, [
+    editingInfo,
+    state.rawText,
+    state.textMode,
+    state.speedMultiplier,
+    state.pauseBetweenSeconds,
+    state.animationStyle,
   ]);
 
   // Main Render Loop
@@ -215,7 +287,7 @@ export const VideoPreview: React.FC<VideoPreviewProps> = ({
 
       // Keep video background in sync without continuously triggering seek locks
       if (bgMediaElement instanceof HTMLVideoElement && bgMediaElement.duration) {
-        if (!isPlayingRef.current) {
+        if (!isPlayingRef.current || editingInfo?.isEditing) {
           const targetTime = time % bgMediaElement.duration;
           if (Math.abs(bgMediaElement.currentTime - targetTime) > 0.05) {
             bgMediaElement.currentTime = targetTime;
@@ -223,15 +295,21 @@ export const VideoPreview: React.FC<VideoPreviewProps> = ({
         }
       }
 
+      const hasVideo = bgMediaElement instanceof HTMLVideoElement && bgMediaElement.duration > 0;
+      const vidDur = hasVideo ? (bgMediaElement as HTMLVideoElement).duration : 0;
+      const isSyncWithVideo = Boolean(state.syncWithVideo) && vidDur > 0;
+      const renderTargetDur = isSyncWithVideo ? vidDur : undefined;
+
       renderCanvasFrame({
         ctx,
         state,
         currentTime: time,
         bgMediaElement,
         dimensions,
+        targetDuration: renderTargetDur,
       });
     },
-    [state, bgMediaElement]
+    [state, bgMediaElement, editingInfo]
   );
 
   // Animation frame loop (halted while Fullscreen is open to prevent resource contention and video stutter)
@@ -247,20 +325,33 @@ export const VideoPreview: React.FC<VideoPreviewProps> = ({
     lastTimeRef.current = performance.now();
 
     const loop = (now: number) => {
-      if (isPlayingRef.current) {
+      const activeEditTime = getEditingDisplayTime();
+      if (activeEditTime !== null) {
+        lastTimeRef.current = now;
+        currentTimeRef.current = activeEditTime;
+        drawFrame(activeEditTime);
+      } else if (isPlayingRef.current) {
         const delta = Math.min(0.1, (now - lastTimeRef.current) / 1000);
         lastTimeRef.current = now;
 
+        const hasVideo = bgMediaElement instanceof HTMLVideoElement && bgMediaElement.duration > 0;
+        const vidDur = hasVideo ? (bgMediaElement as HTMLVideoElement).duration : 0;
+        const effectiveDuration = Boolean(state.syncWithVideo) && vidDur > 0 ? vidDur : totalDuration;
+
         let nextTime = currentTimeRef.current + delta;
-        if (nextTime >= totalDuration) {
+        if (nextTime >= effectiveDuration) {
           // Loop back to start
           nextTime = 0;
           if (bgMediaElement instanceof HTMLVideoElement) {
             bgMediaElement.currentTime = 0;
             bgMediaElement.play().catch(() => {});
           }
-          if (state.audio.enabled && state.audio.sourceType !== 'none') {
-            audioMixer.play(state.audio, totalDuration, 0);
+          if (
+            state.audio.enabled &&
+            state.audio.sourceType === 'file' &&
+            Boolean(state.audio.audioUrl)
+          ) {
+            audioMixer.play(state.audio, effectiveDuration, 0);
           }
         } else if (bgMediaElement instanceof HTMLVideoElement && bgMediaElement.duration) {
           // Continuous background video looping across multiple cycles during a single quote playback
@@ -293,7 +384,15 @@ export const VideoPreview: React.FC<VideoPreviewProps> = ({
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [isPlaying, isFullscreenActive, totalDuration, drawFrame, bgMediaElement, state.audio]);
+  }, [
+    isPlaying,
+    isFullscreenActive,
+    totalDuration,
+    drawFrame,
+    bgMediaElement,
+    state.audio,
+    getEditingDisplayTime,
+  ]);
 
   const openFullscreen = () => {
     setIsPlaying(false);
@@ -318,7 +417,12 @@ export const VideoPreview: React.FC<VideoPreviewProps> = ({
     if (bgMediaElement instanceof HTMLVideoElement) {
       bgMediaElement.currentTime = 0;
     }
-    if (isPlaying && state.audio.enabled && state.audio.sourceType !== 'none') {
+    if (
+      isPlaying &&
+      state.audio.enabled &&
+      state.audio.sourceType === 'file' &&
+      Boolean(state.audio.audioUrl)
+    ) {
       audioMixer.play(state.audio, totalDuration, 0);
     }
     drawFrame(0);
@@ -631,6 +735,14 @@ export const VideoPreview: React.FC<VideoPreviewProps> = ({
               }}
             />
 
+            {/* Live Editing Focus Badge */}
+            {editingInfo?.isEditing && (
+              <div className="absolute top-3 left-3 bg-purple-600/90 text-white text-[11px] font-bold px-2.5 py-1 rounded-full shadow-lg backdrop-blur-sm border border-purple-400/40 flex items-center gap-1.5 pointer-events-none animate-pulse z-20">
+                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                <span>Редактирование (Live)</span>
+              </div>
+            )}
+
             {/* Quick Play Overlay on Click */}
             <button
               onClick={() => setIsPlaying(!isPlaying)}
@@ -649,12 +761,13 @@ export const VideoPreview: React.FC<VideoPreviewProps> = ({
             </button>
           </div>
 
-          {/* Bottom-Left Controls: Play/Pause and Restart directly on video preview */}
-          <div className="absolute bottom-3 left-3 flex items-center gap-2 z-10">
+          {/* Bottom-Left Controls: Play/Pause, Restart, and Sound toggle directly on video preview */}
+          <div className="absolute bottom-3 left-3 flex items-center gap-1.5 sm:gap-2 z-10">
             <button
               onClick={() => setIsPlaying(!isPlaying)}
               className="p-2.5 rounded-xl bg-black/75 hover:bg-black/95 text-zinc-300 hover:text-white border border-white/20 transition-all cursor-pointer shadow-lg hover:scale-105 active:scale-95 flex items-center justify-center"
               title={isPlaying ? 'Пауза' : 'Воспроизведение'}
+              aria-label={isPlaying ? 'Пауза' : 'Воспроизведение'}
             >
               {isPlaying ? (
                 <Pause className="w-4 h-4" />
@@ -667,8 +780,22 @@ export const VideoPreview: React.FC<VideoPreviewProps> = ({
               onClick={handleRestart}
               className="p-2.5 rounded-xl bg-black/75 hover:bg-black/95 text-zinc-300 hover:text-white border border-white/20 transition-all cursor-pointer shadow-lg hover:scale-105 active:scale-95 flex items-center justify-center"
               title="Запустить снова (с начала)"
+              aria-label="Запустить снова"
             >
               <RotateCcw className="w-4 h-4" />
+            </button>
+
+            <button
+              onClick={() => setIsMuted(!isMuted)}
+              className={`p-2.5 rounded-xl border transition-all cursor-pointer shadow-lg hover:scale-105 active:scale-95 flex items-center justify-center ${
+                isMuted
+                  ? 'bg-black/75 hover:bg-black/95 text-rose-400 border-white/20'
+                  : 'bg-black/75 hover:bg-black/95 text-emerald-400 border-white/20'
+              }`}
+              title={isMuted ? 'Включить звук' : 'Выключить звук'}
+              aria-label={isMuted ? 'Включить звук' : 'Выключить звук'}
+            >
+              {isMuted ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4 text-emerald-400" />}
             </button>
           </div>
 

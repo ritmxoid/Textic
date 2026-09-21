@@ -18,13 +18,30 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   }
 
   const handleDownload = () => {
-    if (!progress.downloadUrl) return;
-    const a = document.createElement('a');
-    a.href = progress.downloadUrl;
-    a.download = `animated-text-video-${Date.now()}.${progress.fileExtension}`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    if (!progress.downloadUrl && !progress.fileBlob) return;
+    const filename = `animated-text-video-${Date.now()}.${progress.fileExtension || 'mp4'}`;
+    const url = progress.fileBlob ? URL.createObjectURL(progress.fileBlob) : (progress.downloadUrl || '');
+    if (!url) return;
+
+    try {
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = filename;
+      a.target = '_self';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        try {
+          document.body.removeChild(a);
+          if (progress.fileBlob) {
+            URL.revokeObjectURL(url);
+          }
+        } catch {}
+      }, 60000);
+    } catch (err) {
+      console.error('Download error:', err);
+    }
   };
 
   return (

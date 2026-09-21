@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { AlignCenter, AlignLeft, AlignRight, MoveVertical, Type, Palette, Check } from 'lucide-react';
 import { FONT_OPTIONS } from '../data/presets';
 import { VideoProjectState } from '../types';
+import { ColorPickerModal } from './ColorPickerModal';
 
 const COLOR_SWATCHES = [
   { label: 'Белый', value: '#ffffff' },
@@ -20,6 +21,9 @@ interface FontSectionProps {
 }
 
 export const FontSection: React.FC<FontSectionProps> = ({ state, onChange }) => {
+  const [isTextColorPickerOpen, setIsTextColorPickerOpen] = useState(false);
+  const [isStrokeColorPickerOpen, setIsStrokeColorPickerOpen] = useState(false);
+
   return (
     <div className="bg-[#16161D] border border-white/10 rounded-2xl p-5 shadow-lg shadow-black/20 space-y-5">
       <div className="flex items-center justify-between">
@@ -100,16 +104,20 @@ export const FontSection: React.FC<FontSectionProps> = ({ state, onChange }) => 
               <span>Цвет шрифта</span>
             </span>
             <div className="flex items-center gap-1.5">
-              <input
-                type="color"
-                value={state.textColor}
-                onChange={(e) => onChange({ textColor: e.target.value })}
-                className="w-5 h-5 rounded border border-zinc-700 bg-transparent cursor-pointer"
-                title="Выбрать свой цвет"
-              />
-              <span className="text-[10px] font-mono text-zinc-400 uppercase">
-                {state.textColor}
-              </span>
+              <button
+                type="button"
+                onClick={() => setIsTextColorPickerOpen(true)}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-white/20 bg-zinc-800/80 hover:bg-zinc-700 transition-all cursor-pointer shadow-sm active:scale-95"
+                title="Выбрать свой цвет шрифта"
+              >
+                <span
+                  className="w-3.5 h-3.5 rounded-full border border-white/40 shadow-inner shrink-0"
+                  style={{ backgroundColor: state.textColor }}
+                />
+                <span className="text-[10px] font-mono text-zinc-300 font-semibold uppercase">
+                  {state.textColor}
+                </span>
+              </button>
             </div>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -144,8 +152,8 @@ export const FontSection: React.FC<FontSectionProps> = ({ state, onChange }) => 
         </div>
       </div>
 
-      {/* Font Cards Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 max-h-72 sm:max-h-80 overflow-y-auto pr-1">
+      {/* Font Cards Grid - 1.5 rows visible with scroll */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 max-h-[118px] sm:max-h-[122px] overflow-y-auto pr-1.5 scrollbar-thin scrollbar-thumb-white/20 scrollbar-track-transparent rounded-xl">
         {FONT_OPTIONS.map((font) => {
           const isSelected = state.fontFamily === font.family;
           return (
@@ -193,13 +201,20 @@ export const FontSection: React.FC<FontSectionProps> = ({ state, onChange }) => 
 
           {state.strokeEnabled && (
             <div className="flex items-center justify-between gap-2 pt-1">
-              <input
-                type="color"
-                value={state.strokeColor}
-                onChange={(e) => onChange({ strokeColor: e.target.value })}
-                className="w-6 h-6 rounded border border-zinc-700 bg-transparent cursor-pointer"
+              <button
+                type="button"
+                onClick={() => setIsStrokeColorPickerOpen(true)}
+                className="flex items-center gap-1.5 px-2 py-1 rounded border border-white/20 bg-zinc-800/80 hover:bg-zinc-700 transition-all cursor-pointer shadow-sm active:scale-95 shrink-0"
                 title="Цвет обводки"
-              />
+              >
+                <span
+                  className="w-3.5 h-3.5 rounded-full border border-white/40 shadow-inner shrink-0"
+                  style={{ backgroundColor: state.strokeColor }}
+                />
+                <span className="text-[10px] font-mono text-zinc-300 font-semibold uppercase">
+                  {state.strokeColor}
+                </span>
+              </button>
               <div className="flex-1">
                 <input
                   type="range"
@@ -268,6 +283,23 @@ export const FontSection: React.FC<FontSectionProps> = ({ state, onChange }) => 
           </div>
         </div>
       </div>
+
+      {/* Color Picker Modals */}
+      <ColorPickerModal
+        isOpen={isTextColorPickerOpen}
+        onClose={() => setIsTextColorPickerOpen(false)}
+        color={state.textColor}
+        onChange={(newColor) => onChange({ textColor: newColor })}
+        title="Микшер цвета текста"
+      />
+
+      <ColorPickerModal
+        isOpen={isStrokeColorPickerOpen}
+        onClose={() => setIsStrokeColorPickerOpen(false)}
+        color={state.strokeColor}
+        onChange={(newColor) => onChange({ strokeColor: newColor })}
+        title="Микшер цвета обводки"
+      />
     </div>
   );
 };
