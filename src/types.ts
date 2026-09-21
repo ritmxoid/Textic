@@ -8,6 +8,7 @@ export interface ExtraEffects {
   fire: boolean;
   neon: boolean;
   shadow: boolean;
+  particles: boolean;
 }
 
 export type AspectRatio = '9:16' | '16:9' | '1:1';
@@ -37,7 +38,7 @@ export interface TextSegment {
   duration: number;
 }
 
-export type AudioSourceType = 'none' | 'file' | 'generator';
+export type AudioSourceType = 'none' | 'video' | 'file' | 'generator';
 
 export type MusicPresetId =
   | 'lofi-chill'
@@ -45,7 +46,11 @@ export type MusicPresetId =
   | 'deep-ambient'
   | 'epic-drive'
   | 'phonk-energy'
-  | 'acoustic-warmth';
+  | 'acoustic-warmth'
+  | 'funny'
+  | 'heroic'
+  | 'notes'
+  | 'lightning';
 
 export interface AudioState {
   enabled: boolean;
@@ -53,9 +58,13 @@ export interface AudioState {
   audioUrl: string | null;
   audioFileName: string | null;
   presetId: MusicPresetId;
-  volume: number; // 0 to 1
+  seed?: number; // Random seed for truly unique procedural music composition
+  volume: number; // 0 to 1 (Music volume)
   loop: boolean;
   audioDuration: number;
+  // Dual-layer audio controls for video background sound
+  videoAudioEnabled?: boolean; // When true, background video audio track is active
+  videoVolume?: number; // 0 to 1 (Video original voice/sound volume)
 }
 
 export interface VideoProjectState {
@@ -64,6 +73,7 @@ export interface VideoProjectState {
   bgMediaUrl: string | null;
   bgMediaType: 'image' | 'video' | null;
   bgPresetId: string;
+  bgCustomColor?: string; // Optional custom sheet / gradient color
   bgOverlayOpacity: number; // 0 to 0.9
 
   // Audio / Music
@@ -90,6 +100,8 @@ export interface VideoProjectState {
   neonColor: string;
   speedMultiplier: number; // 0.1 to 3.0
   pauseBetweenSeconds: number; // 0.2 to 3.0
+  syncWithVideo?: boolean; // When true and video background is present, text animates smoothly across video length
+  textLoopMode?: 'stretch' | 'loop'; // Whether to stretch text pacing across video or loop text every cycle
 
   // Canvas & Output
   aspectRatio: AspectRatio;

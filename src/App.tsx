@@ -3,7 +3,7 @@ import { Video, Download } from 'lucide-react';
 import { Header } from './components/Header';
 import { VideoPreview } from './components/VideoPreview';
 import { BackgroundSection } from './components/BackgroundSection';
-import { TextInputSection } from './components/TextInputSection';
+import { TextInputSection, EditingFocusInfo } from './components/TextInputSection';
 import { AudioSection } from './components/AudioSection';
 import { FontSection } from './components/FontSection';
 import { TextModeSection } from './components/TextModeSection';
@@ -11,6 +11,7 @@ import { AnimationStyleSection } from './components/AnimationStyleSection';
 import { EffectsSection } from './components/EffectsSection';
 import { SpeedSection } from './components/SpeedSection';
 import { ExportModal } from './components/ExportModal';
+import { UploadModal } from './components/UploadModal';
 import { SAMPLE_TEXTS } from './data/presets';
 import { VideoProjectState } from './types';
 import { ExportProgress, exportVideo } from './utils/videoRecorder';
@@ -30,7 +31,7 @@ const DEFAULT_STATE: VideoProjectState = {
   bgMediaUrl: null,
   bgMediaType: null,
   bgPresetId: 'midnight-violet',
-  bgOverlayOpacity: 0.35,
+  bgOverlayOpacity: 0.20,
 
   // Audio / Music
   audio: {
@@ -67,6 +68,7 @@ const DEFAULT_STATE: VideoProjectState = {
     fire: false,
     neon: false,
     shadow: true,
+    particles: false,
   },
   neonColor: '#a855f7',
   speedMultiplier: 1.0,
@@ -98,10 +100,14 @@ export default function App() {
   });
 
   const [isFullscreenOpen, setIsFullscreenOpen] = useState<boolean>(false);
-  const [fileName, setFileName] = useState<string | null>(null);
+  const [fileName, setFileName] = useState<string | null>(() => {
+    const saved = loadProjectState();
+    return saved?.savedBgFileName || null;
+  });
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isMediaLoading, setIsMediaLoading] = useState<boolean>(false);
   const [uploadSuccess, setUploadSuccess] = useState<boolean>(false);
+  const [editingInfo, setEditingInfo] = useState<EditingFocusInfo | null>(null);
 
   const [bgMediaElement, setBgMediaElement] = useState<HTMLImageElement | HTMLVideoElement | null>(null);
   const bgMediaElementRef = useRef<HTMLImageElement | HTMLVideoElement | null>(null);
@@ -110,30 +116,16 @@ export default function App() {
   const handleFileUploadRef = useRef<(file: File, isRestoration?: boolean) => void>(() => {});
 
   const mediaUrlRef = useRef<string | null>(null);
-  const mediaSandboxRef = useRef<HTMLDivElement>(null);
   const lastUploadedFileRef = useRef<File | null>(null);
-
-  // Helper to release hardware video decoders in mobile Chromium / Android MediaCodec
-  const teardownVideoElement = (v: HTMLVideoElement | null) => {
-    if (!v) return;
-    try {
-      v.pause();
-      v.removeAttribute('src');
-      while (v.firstChild) {
-        v.removeChild(v.firstChild);
-      }
-      v.load();
-    } catch (err) {
-      console.warn('Error releasing video element:', err);
-    }
-  };
 
   // Compute total duration
   const { totalDuration } = splitTextIntoSegments(
     projectState.rawText,
     projectState.textMode,
     projectState.speedMultiplier,
-    projectState.pauseBetweenSeconds
+    projectState.pauseBetweenSeconds,
+    undefined,
+    projectState.animationStyle
   );
 
   // Export State
@@ -147,6 +139,8 @@ export default function App() {
     error: null,
   });
 
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
+
   const handleStateChange = useCallback((patch: Partial<VideoProjectState>) => {
     setProjectState((prev) => ({ ...prev, ...patch }));
   }, []);
@@ -154,32 +148,31 @@ export default function App() {
   // Automatic debounced persistence of user's project settings & text
   useEffect(() => {
     const timer = setTimeout(() => {
-      saveProjectState(projectState);
+      saveProjectState(projectState, { fileName });
     }, 200);
     return () => clearTimeout(timer);
-  }, [projectState]);
+  }, [projectState, fileName]);
 
-  // Handle media file upload (robust video/image detection, decoder management, and fallback pipeline)
-  const handleFileUpload = useCallback((file: File, isRestoration = false) => {
+  // Handle media file upload (rock-solid, clean, instant video and image loading)
+  const handleFileUpload = useCallback(async (file: File, isRestoration = false) => {
     setUploadError(null);
     setUploadSuccess(false);
     setIsMediaLoading(true);
     lastUploadedFileRef.current = file;
 
-    // Persist file into IndexedDB so tab reloads / Android Chrome memory eviction never loses it
-    if (!isRestoration) {
-      saveMediaFile('background', file, file.name, file.type);
-    }
-
-    // 1. Properly release any existing video element and hardware decoders
+    // Release any previous video element safely
     if (bgMediaElementRef.current instanceof HTMLVideoElement) {
-      teardownVideoElement(bgMediaElementRef.current);
+      try {
+        bgMediaElementRef.current.pause();
+        bgMediaElementRef.current.onloadedmetadata = null;
+        bgMediaElementRef.current.onloadeddata = null;
+        bgMediaElementRef.current.oncanplay = null;
+        bgMediaElementRef.current.onerror = null;
+        bgMediaElementRef.current.src = '';
+      } catch {}
     }
-    if (mediaSandboxRef.current) {
-      const existingVideos = mediaSandboxRef.current.querySelectorAll('video');
-      existingVideos.forEach((v) => teardownVideoElement(v));
-      mediaSandboxRef.current.innerHTML = '';
-    }
+    bgMediaElementRef.current = null;
+    setBgMediaElement(null);
 
     if (mediaUrlRef.current) {
       try {
@@ -188,265 +181,137 @@ export default function App() {
       mediaUrlRef.current = null;
     }
 
-    const ext = file.name.split('.').pop()?.toLowerCase() || '';
     const isVideo =
       file.type.startsWith('video/') ||
       /\.(mp4|webm|mov|m4v|mkv|avi|3gp)$/i.test(file.name);
 
-    let resolvedMime = file.type;
-    if (isVideo) {
-      if (!resolvedMime || resolvedMime === 'application/octet-stream' || !resolvedMime.startsWith('video/')) {
-        if (ext === 'webm') resolvedMime = 'video/webm';
-        else if (ext === 'mov') resolvedMime = 'video/quicktime';
-        else resolvedMime = 'video/mp4';
-      }
-    } else {
-      if (!resolvedMime || resolvedMime === 'application/octet-stream' || !resolvedMime.startsWith('image/')) {
-        if (ext === 'png') resolvedMime = 'image/png';
-        else if (ext === 'webp') resolvedMime = 'image/webp';
-        else resolvedMime = 'image/jpeg';
-      }
-    }
-
-    const targetMime = resolvedMime || (isVideo ? 'video/mp4' : 'image/jpeg');
+    const blobUrl = URL.createObjectURL(file);
+    mediaUrlRef.current = blobUrl;
 
     if (isVideo) {
-      // Create slice with explicit MIME type to guarantee Android MediaCodec detects the MP4 container correctly
-      const typedBlob =
-        file.type && file.type.startsWith('video/')
-          ? file
-          : file.slice(0, file.size, targetMime);
+      const video = document.createElement('video');
+      video.muted = true;
+      video.defaultMuted = true;
+      video.loop = true;
+      video.playsInline = true;
+      video.setAttribute('playsinline', '');
+      video.setAttribute('webkit-playsinline', '');
+      video.setAttribute('muted', '');
+      video.preload = 'auto';
 
-      const blobUrl = URL.createObjectURL(typedBlob);
-      mediaUrlRef.current = blobUrl;
+      let isReady = false;
+      let pollTimer: any = null;
 
-      const loadVideoSource = (sourceUrl: string, isFallbackAttempt = false) => {
-        const video = document.createElement('video');
-        video.muted = true;
-        video.defaultMuted = true;
-        video.loop = true;
-        video.playsInline = true;
-        video.autoplay = true;
+      const onReady = () => {
+        if (isReady) return;
+        isReady = true;
+        if (pollTimer) clearInterval(pollTimer);
 
-        video.setAttribute('playsinline', '');
-        video.setAttribute('webkit-playsinline', '');
-        video.setAttribute('muted', '');
-        video.setAttribute('autoplay', '');
-        video.preload = 'auto';
-
-        if (!sourceUrl.startsWith('blob:') && !sourceUrl.startsWith('data:')) {
-          video.crossOrigin = 'anonymous';
-        }
-
-        // Attach to DOM sandbox BEFORE setting source so Chromium never aborts pipeline on insertion
-        if (mediaSandboxRef.current) {
-          mediaSandboxRef.current.innerHTML = '';
-          mediaSandboxRef.current.appendChild(video);
-        }
-
-        // Explicit source tag with MIME hint
-        const sourceEl = document.createElement('source');
-        sourceEl.src = sourceUrl;
-        sourceEl.type = targetMime;
-        video.appendChild(sourceEl);
-
-        video.src = sourceUrl;
-
-        let initialized = false;
-        let pollTimer: NodeJS.Timeout | null = null;
-        let safetyTimer: NodeJS.Timeout | null = null;
-
-        const cleanup = () => {
-          if (pollTimer) {
-            clearInterval(pollTimer);
-            pollTimer = null;
-          }
-          if (safetyTimer) {
-            clearTimeout(safetyTimer);
-            safetyTimer = null;
-          }
-        };
-
-        safetyTimer = setTimeout(() => {
-          if (!initialized) {
-            failWithError(
-              undefined,
-              'Загрузка видео заняла слишком много времени. Проверьте формат файла или нажмите «Повторить».'
-            );
-          }
-        }, 12000);
-
-        const onReady = () => {
-          if (initialized) return;
-          initialized = true;
-          cleanup();
-
-          setFileName(file.name);
-          setIsMediaLoading(false);
-          setUploadError(null);
-          setUploadSuccess(true);
-          setTimeout(() => setUploadSuccess(false), 2000);
-
-          video.play().catch(() => {});
-          setBgMediaElement(video);
-          handleStateChange({
-            bgType: 'video',
-            bgMediaUrl: sourceUrl,
-            bgMediaType: 'video',
-          });
-        };
-
-        const failWithError = (errCode?: number, customMsg?: string) => {
-          if (initialized) return;
-          initialized = true;
-          cleanup();
-          teardownVideoElement(video);
-          setIsMediaLoading(false);
-
-          let msg = customMsg || 'Браузер вашего устройства не смог открыть этот видеофайл.';
-          if (!customMsg) {
-            if (errCode === 4) {
-              msg =
-                'Браузер устройства временно не смог запустить видеокодек (код 4). Попробуйте нажать кнопку «Повторить» ниже или выберите видео снова.';
-            } else if (errCode === 3) {
-              msg =
-                'Ошибка декодирования видео (код 3). Возможно, файл поврежден или использует несовместимый видеокодек.';
-            }
-          }
-
-          setUploadError(msg);
-        };
-
-        video.onloadedmetadata = onReady;
-        video.onloadeddata = onReady;
-        video.oncanplay = onReady;
-        video.oncanplaythrough = onReady;
-        video.onplay = onReady;
-        video.onended = () => {
-          video.currentTime = 0;
-          video.play().catch(() => {});
-        };
-        video.ontimeupdate = () => {
-          if (video.currentTime > 0) onReady();
-        };
-
-        video.onerror = async () => {
-          // Ignore aborted request code 1
-          if (video.error && video.error.code === 1) {
-            return;
-          }
-
-          if (video.readyState >= 1 && video.videoWidth > 0) {
-            onReady();
-            return;
-          }
-
-          // Automatic Fallbacks for Android Chrome / Chromium
-          if (!isFallbackAttempt) {
-            cleanup();
-            teardownVideoElement(video);
-
-            // Fallback 1: Try reading via in-memory ArrayBuffer to eliminate ContentProvider/file descriptor glitches
-            try {
-              const arrayBuf = await file.arrayBuffer();
-              const memoryBlob = new Blob([arrayBuf], { type: targetMime });
-              const freshUrl = URL.createObjectURL(memoryBlob);
-              mediaUrlRef.current = freshUrl;
-              loadVideoSource(freshUrl, true);
-              return;
-            } catch (bufErr) {
-              console.warn('ArrayBuffer fallback failed, trying DataURL fallback:', bufErr);
-            }
-
-            // Fallback 2: Try Data URL for files under 60MB
-            if (file.size <= 60 * 1024 * 1024) {
-              try {
-                const reader = new FileReader();
-                reader.onload = () => {
-                  if (reader.result && typeof reader.result === 'string') {
-                    loadVideoSource(reader.result, true);
-                  } else {
-                    failWithError(video.error?.code);
-                  }
-                };
-                reader.onerror = () => {
-                  failWithError(video.error?.code);
-                };
-                reader.readAsDataURL(file);
-                return;
-              } catch (dataErr) {
-                console.warn('DataURL fallback failed:', dataErr);
-              }
-            }
-          }
-
-          failWithError(video.error?.code);
-        };
-
-        video.load();
-
-        if (video.readyState >= 1 && video.videoWidth > 0) {
-          onReady();
-          return;
-        }
-
-        pollTimer = setInterval(() => {
-          if (initialized) {
-            cleanup();
-            return;
-          }
-          if (video.readyState >= 1 && video.videoWidth > 0) {
-            onReady();
-          }
-        }, 100);
-
-        setTimeout(() => {
-          if (pollTimer) clearInterval(pollTimer);
-        }, 6000);
-      };
-
-      loadVideoSource(blobUrl);
-    } else {
-      const blobUrl = URL.createObjectURL(file);
-      mediaUrlRef.current = blobUrl;
-      const img = new Image();
-      if (!blobUrl.startsWith('blob:') && !blobUrl.startsWith('data:')) {
-        img.crossOrigin = 'anonymous';
-      }
-      let initialized = false;
-
-      img.onload = () => {
-        if (initialized) return;
-        initialized = true;
         setFileName(file.name);
         setIsMediaLoading(false);
         setUploadError(null);
         setUploadSuccess(true);
         setTimeout(() => setUploadSuccess(false), 2000);
 
+        if (!isRestoration) {
+          saveMediaFile('background', file, file.name, file.type || 'video/mp4');
+        }
+
+        video.play().catch(() => {});
+        bgMediaElementRef.current = video;
+        setBgMediaElement(video);
+        setProjectState((prev) => ({
+          ...prev,
+          bgType: 'video',
+          bgMediaUrl: blobUrl,
+          bgMediaType: 'video',
+          audio: {
+            ...prev.audio,
+            videoAudioEnabled: prev.audio.videoAudioEnabled ?? true,
+            videoVolume: prev.audio.videoVolume ?? 0.8,
+          },
+        }));
+      };
+
+      video.onloadedmetadata = onReady;
+      video.onloadeddata = onReady;
+      video.oncanplay = onReady;
+      video.oncanplaythrough = onReady;
+      video.onplay = onReady;
+      video.onplaying = onReady;
+      video.ontimeupdate = () => {
+        if (video.currentTime > 0) onReady();
+      };
+
+      video.onerror = () => {
+        if (video.readyState >= 1 && video.videoWidth > 0) {
+          onReady();
+        }
+      };
+
+      video.src = blobUrl;
+
+      if (video.readyState >= 1 && video.videoWidth > 0) {
+        onReady();
+      } else {
+        let count = 0;
+        pollTimer = setInterval(() => {
+          count++;
+          if (isReady) {
+            clearInterval(pollTimer);
+            return;
+          }
+          if (video.readyState >= 1 || video.videoWidth > 0 || video.duration > 0) {
+            onReady();
+            clearInterval(pollTimer);
+          } else if (count > 60) {
+            clearInterval(pollTimer);
+            if (!isReady) {
+              setIsMediaLoading(false);
+              setUploadError('Не удалось загрузить видео. Попробуйте еще раз или выберите другой файл.');
+            }
+          }
+        }, 100);
+      }
+    } else {
+      const img = new Image();
+      let isReady = false;
+
+      const onImageReady = () => {
+        if (isReady) return;
+        isReady = true;
+        setFileName(file.name);
+        setIsMediaLoading(false);
+        setUploadError(null);
+        setUploadSuccess(true);
+        setTimeout(() => setUploadSuccess(false), 2000);
+
+        if (!isRestoration) {
+          saveMediaFile('background', file, file.name, file.type || 'image/jpeg');
+        }
+
+        bgMediaElementRef.current = img;
         setBgMediaElement(img);
-        handleStateChange({
+        setProjectState((prev) => ({
+          ...prev,
           bgType: 'image',
           bgMediaUrl: blobUrl,
           bgMediaType: 'image',
-        });
+        }));
       };
 
+      img.onload = onImageReady;
       img.onerror = () => {
-        if (initialized) return;
-        initialized = true;
         setIsMediaLoading(false);
-        setUploadError(
-          'Не удалось открыть изображение. Проверьте формат файла (поддерживаются JPG, PNG, WEBP).'
-        );
+        setUploadError('Не удалось загрузить изображение.');
       };
 
       img.src = blobUrl;
       if (img.complete && img.naturalWidth > 0) {
-        img.onload(new Event('load'));
+        onImageReady();
       }
     }
-  }, [handleStateChange]);
+  }, []);
 
   useEffect(() => {
     handleFileUploadRef.current = handleFileUpload;
@@ -463,7 +328,9 @@ export default function App() {
       try {
         const bgRecord = await loadMediaFile('background');
         if (isMounted && bgRecord && bgRecord.blob) {
-          const restoredFile = new File([bgRecord.blob], bgRecord.fileName, {
+          const restoredName = bgRecord.fileName || 'custom-background';
+          setFileName(restoredName);
+          const restoredFile = new File([bgRecord.blob], restoredName, {
             type: bgRecord.mimeType || bgRecord.blob.type,
           });
           handleFileUploadRef.current(restoredFile, true);
@@ -516,18 +383,17 @@ export default function App() {
 
   const handleClearBackgroundMedia = () => {
     if (bgMediaElementRef.current instanceof HTMLVideoElement) {
-      teardownVideoElement(bgMediaElementRef.current);
+      try {
+        bgMediaElementRef.current.pause();
+        bgMediaElementRef.current.src = '';
+      } catch {}
     }
+    bgMediaElementRef.current = null;
     if (mediaUrlRef.current) {
       try {
         URL.revokeObjectURL(mediaUrlRef.current);
       } catch {}
       mediaUrlRef.current = null;
-    }
-    if (mediaSandboxRef.current) {
-      const existingVideos = mediaSandboxRef.current.querySelectorAll('video');
-      existingVideos.forEach((v) => teardownVideoElement(v));
-      mediaSandboxRef.current.innerHTML = '';
     }
     lastUploadedFileRef.current = null;
     clearMediaFile('background');
@@ -555,20 +421,29 @@ export default function App() {
   };
 
   const handleExport = async () => {
+    const userFormat = 'webm';
+
     try {
       setExportProgress({
         isExporting: true,
         progress: 0,
-        statusText: 'Подготовка к записи видео и звука...',
+        statusText: 'Подготовка к созданию WebM видео...',
         downloadUrl: null,
         fileBlob: null,
-        fileExtension: 'mp4',
+        fileExtension: 'webm',
         error: null,
       });
+
+      const hasVideo = bgMediaElement instanceof HTMLVideoElement && bgMediaElement.duration > 0;
+      const vidDuration =
+        hasVideo && projectState.syncWithVideo ? (bgMediaElement as HTMLVideoElement).duration : undefined;
 
       const result = await exportVideo({
         state: projectState,
         bgMediaElement,
+        targetFormat: 'webm',
+        durationOverride: vidDuration,
+        textTimingMode: projectState.textLoopMode || 'stretch',
         onProgress: (progress) => {
           setExportProgress(progress);
         },
@@ -576,7 +451,7 @@ export default function App() {
 
       if (result && result.downloadUrl) {
         // Automatically start file download in browser
-        const ext = result.blob?.type?.includes('mp4') ? 'mp4' : 'webm';
+        const ext = result.fileExtension || 'webm';
         const a = document.createElement('a');
         a.href = result.downloadUrl;
         a.download = `animated-quote-${Date.now()}.${ext}`;
@@ -591,7 +466,7 @@ export default function App() {
         statusText: 'Ошибка экспорта',
         downloadUrl: null,
         fileBlob: null,
-        fileExtension: 'mp4',
+        fileExtension: 'webm',
         error: String(err),
       });
     }
@@ -606,14 +481,20 @@ export default function App() {
     };
   }, []);
 
+  const activeBgFileName =
+    (projectState.bgType === 'video' || projectState.bgType === 'image') && bgMediaElement
+      ? fileName
+      : null;
+
   return (
     <div className="min-h-screen bg-[#0F0F12] text-zinc-100 flex flex-col font-sans selection:bg-purple-600/30 selection:text-purple-200 overflow-x-clip w-full max-w-[100vw]">
       {/* Top Header with File Upload Action */}
       <Header
         onFileUpload={handleFileUpload}
-        fileName={fileName}
+        fileName={activeBgFileName}
         onClearFile={handleClearBackgroundMedia}
         onResetProject={handleResetAll}
+        onOpenUploadModal={() => setIsUploadModalOpen(true)}
       />
 
       {/* Main Content Layout */}
@@ -635,6 +516,7 @@ export default function App() {
             isFullscreenOpen={isFullscreenOpen}
             onOpenFullscreen={() => setIsFullscreenOpen(true)}
             onCloseFullscreen={() => setIsFullscreenOpen(false)}
+            editingInfo={editingInfo}
           />
         </div>
 
@@ -644,6 +526,7 @@ export default function App() {
           <TextInputSection
             state={projectState}
             onChange={handleStateChange}
+            onEditingFocus={setEditingInfo}
           />
 
           {/* Step 2: Fonts & Formatting */}
@@ -657,7 +540,8 @@ export default function App() {
             state={projectState}
             onChange={handleStateChange}
             onClearBackgroundMedia={handleClearBackgroundMedia}
-            fileName={fileName}
+            fileName={activeBgFileName}
+            onOpenUploadModal={() => setIsUploadModalOpen(true)}
           />
 
           {/* Step 4: Music & Soundtrack */}
@@ -726,21 +610,12 @@ export default function App() {
         }}
       />
 
-      {/* Media sandbox kept in viewport to preserve active hardware video decoding in mobile Chrome */}
-      <div
-        ref={mediaSandboxRef}
-        style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          width: 1,
-          height: 1,
-          opacity: 0.001,
-          pointerEvents: 'none',
-          overflow: 'hidden',
-          zIndex: -1,
-        }}
-        aria-hidden="true"
+      {/* Upload Modal with 35 MB Reminder */}
+      <UploadModal
+        isOpen={isUploadModalOpen}
+        onClose={() => setIsUploadModalOpen(false)}
+        onFileUpload={handleFileUpload}
+        currentFileName={activeBgFileName}
       />
     </div>
   );
